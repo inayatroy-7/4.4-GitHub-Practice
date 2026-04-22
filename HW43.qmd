@@ -1,0 +1,399 @@
+---
+title: "Reproducible Data Analysis"
+author: "Inayat Roy"
+date: today
+format:
+  pdf:
+    toc: true
+    number-sections: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+# Busiest Airports Analysis
+
+```{r}
+#| label: airports-data
+
+library(tidyverse)
+library(knitr)
+library(patchwork)
+
+# Passenger data sourced from Wikipedia:
+# List of Busiest Airports by Passenger Traffic (ACI figures)
+airports <- data.frame(
+  Code = c("ATL", "FRA", "PKX", "DXB", "LAX", "LHR"),
+  Name = c("Atlanta", "Frankfurt", "Beijing Daxing",
+           "Dubai", "Los Angeles", "London Heathrow"),
+  `2020` = c(42918685, 18768601, NA, 25836771, 28779527, 22111469),
+  `2021` = c(75704760, 24812849, 25051012, 29110609, 48007284, NA),
+  `2022` = c(93699630, 48918482, NA, 66069981, 65924298, 61614508),
+  `2023` = c(104653451, 59355389, 39400000, 86994365, 75050875, 79183364),
+  `2024` = c(108067766, 61564957, 49441029, 92331506, 76588028, 83884572),
+  check.names = FALSE
+)
+
+# Reshape to long format for plotting
+airports_long <- airports %>%
+  select(-Code) %>%
+  pivot_longer(
+    cols = -Name,
+    names_to = "Year",
+    values_to = "Passengers"
+  ) %>%
+  mutate(
+    Year = as.integer(Year),
+    Passengers_M = Passengers / 1000000
+  )
+```
+
+## Overview
+
+This section examines passenger traffic trends across six major international
+airports from 2020 to 2024. The years covered span the COVID-19 pandemic's
+impact on air travel through the subsequent recovery period. The six airports
+selected — Atlanta (ATL), Frankfurt (FRA), Beijing Daxing (PKX), Dubai (DXB),
+Los Angeles (LAX), and London Heathrow (LHR) — represent key hubs across
+North America, Europe, the Middle East, and Asia.
+
+## Passenger Traffic Table
+
+```{r}
+#| label: airports-table
+
+airports %>%
+  select(-Code) %>%
+  mutate(across(where(is.numeric), ~ ifelse(is.na(.), "N/A",
+    formatC(., format = "f", digits = 0, big.mark = ",")))) %>%
+  kable(
+    caption = "Annual Passenger Traffic for Six Major Airports (2020-2024)",
+    col.names = c("Airport", "2020", "2021", "2022", "2023", "2024")
+  )
+```
+
+The table reveals the dramatic collapse of passenger traffic in 2020 due to
+the COVID-19 pandemic, followed by a strong and consistent recovery through
+2024. Atlanta consistently led all airports in total passengers, reaching over
+108 million in 2024. Beijing Daxing (PKX) did not appear in the top 50 in 2020
+and 2022, reflecting China's strict border restrictions during those years.
+London Heathrow similarly fell outside the top 50 in 2021 due to the UK's
+travel restrictions.
+
+## Passenger Traffic Over Time
+
+```{r}
+#| label: airports-plot
+#| fig-cap: "Passenger traffic (in millions) for six major airports, 2020-2024."
+#| fig-height: 4
+
+ggplot(airports_long, aes(x = Year, y = Passengers_M,
+                          color = Name, group = Name)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Passenger Traffic Recovery at Six Major Airports (2020-2024)",
+    x = "Year",
+    y = "Passengers (Millions)",
+    color = "Airport"
+  ) +
+  theme_minimal() +
+  scale_x_continuous(breaks = 2020:2024)
+```
+
+The line graph makes the recovery trajectory clear for each airport. All six
+airports experienced sharp declines in 2020, with Dubai and Heathrow among the
+hardest hit. By 2023 and 2024, most airports had not only recovered but
+surpassed pre-pandemic levels. Atlanta's consistent dominance is visually
+apparent, while Beijing Daxing shows the steepest growth curve as it ramped
+up operations from a near-standstill.
+
+# Monte Carlo Numerical Integration
+
+```{r}
+#| label: mc-setup
+
+set.seed(42)
+
+# Monte Carlo simulation function for Beta(2,2) PDF
+# x bounds: 0 to 1, y bounds: 0 to 1.5
+run_mc <- function(n, shape1 = 2, shape2 = 2,
+                   x_min = 0, x_max = 1,
+                   y_min = 0, y_max = 1.5) {
+  x_vals <- runif(n, x_min, x_max)
+  y_vals <- runif(n, y_min, y_max)
+  below <- y_vals <= dbeta(x_vals, shape1, shape2)
+  area <- (x_max - x_min) * (y_max - y_min)
+  estimate <- mean(below) * area
+  data.frame(x = x_vals, y = y_vals, below = below,
+             estimate = estimate, n = n)
+}
+
+# Run at four resolutions
+mc10    <- run_mc(10)
+mc100   <- run_mc(100)
+mc1000  <- run_mc(1000)
+mc10000 <- run_mc(10000)
+
+# Function to make a single panel plot
+make_mc_plot <- function(df) {
+  est <- round(unique(df$estimate), 4)
+  n   <- unique(df$n)
+  x_seq <- seq(0, 1, length.out = 300)
+  curve_df <- data.frame(x = x_seq,
+                         y = dbeta(x_seq, shape1 = 2, shape2 = 2))
+
+  ggplot(df, aes(x = x, y = y, color = below)) +
+    geom_point(alpha = 0.5, size = 0.8) +
+    geom_line(data = curve_df, aes(x = x, y = y),
+              color = "black", linewidth = 1, inherit.aes = FALSE) +
+    scale_color_manual(
+      values = c("TRUE" = "steelblue", "FALSE" = "tomato")) +
+    labs(
+      title = paste0("n = ", formatC(n, format = "d", big.mark = ",")),
+      subtitle = paste0("Estimate: ", est),
+      x = "x", y = "y"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+```
+
+## Method Overview
+
+Monte Carlo numerical integration estimates the value of a definite integral
+using random sampling. The approach works by generating random points within
+a rectangular window that bounds the function, then calculating the proportion
+of points that fall at or below the curve. Multiplying this proportion by the
+area of the rectangle yields an estimate of the integral. As the number of
+sampled points increases, the estimate converges toward the true value.
+
+For this analysis, the function being integrated is the probability density
+function of the Beta distribution with shape parameters $\alpha = 2$ and
+$\beta = 2$, integrated over $x \in [0, 1]$ with a rectangular window of
+$y \in [0, 1.5]$.
+
+## Small Multiple Visualization
+
+```{r}
+#| label: mc-plots
+#| fig-cap: "Monte Carlo integration of the Beta(2,2) PDF at four resolutions."
+#| fig-height: 6
+
+plot10    <- make_mc_plot(mc10)
+plot100   <- make_mc_plot(mc100)
+plot1000  <- make_mc_plot(mc1000)
+plot10000 <- make_mc_plot(mc10000)
+
+(plot10 + plot100) / (plot1000 + plot10000)
+```
+
+## Results and Discussion
+
+The small multiple visualization demonstrates how the Monte Carlo estimate
+improves with more simulated points. At $n = 10$, the estimate is highly
+variable and unreliable. By $n = 1{,}000$ and $n = 10{,}000$, the estimate
+stabilizes and approaches the true value of 1.0, which is expected since the
+Beta distribution PDF integrates to exactly 1 over $[0, 1]$. This illustrates
+a core principle of Monte Carlo methods: precision improves with resolution.
+
+# Planning and Prompting GenAI Tools
+
+## Data Context and Plan
+
+**Goals:** The calcium dataset is currently in a wide format, which makes it
+harder to analyze trends properly. I want to restructure it so that each
+observation is in its own row, making the data tidy and easier to work with.
+My main focus is to track how calcium levels change over time and see if diet
+and exercise play a role.
+
+**Needs:**
+
+- calcium.csv dataset
+- null treatment group, diet/exercise treatment group
+- Variables: Initial, Year 1, Year 2, Year 3
+- Packages: tidyverse, ggplot2
+- Functions: read_csv(), pivot_longer(), mutate(), bind_rows(), ggplot(),
+geom_line()
+
+**Steps:**
+
+1. Load calcium.csv using read_csv()
+2. Rename columns to identify which group they belong to
+3. Separate the data into two group-specific data frames
+4. Use pivot_longer() to reshape each group from wide to long format
+5. Add a group label column to each reshaped data frame
+6. Combine both groups into one tidy data frame using bind_rows()
+7. Calculate mean calcium levels per group per year
+8. Create a line plot using ggplot2 showing trends over time for each group
+
+## Plan-Based Prompt Results
+
+I provided Claude with my plan and the calcium.csv file. Here is the
+response generated:
+
+```r
+library(tidyverse)
+
+# Load the calcium data
+calcium <- read_csv("calcium.csv")
+
+# Rename columns to identify groups
+colnames(calcium) <- c("null_y0", "null_y1", "null_y2", "null_y3",
+                       "diet_y0", "diet_y1", "diet_y2", "diet_y3")
+
+# Separate and reshape null treatment group
+null_group <- calcium %>%
+  select(starts_with("null")) %>%
+  drop_na() %>%
+  mutate(id = row_number(), group = "Null Treatment") %>%
+  pivot_longer(cols = starts_with("null"),
+               names_to = "year", values_to = "calcium") %>%
+  mutate(year = recode(year, "null_y0" = 0, "null_y1" = 1,
+                       "null_y2" = 2, "null_y3" = 3))
+
+# Separate and reshape diet/exercise group
+diet_group <- calcium %>%
+  select(starts_with("diet")) %>%
+  drop_na() %>%
+  mutate(id = row_number(), group = "Diet/Exercise") %>%
+  pivot_longer(cols = starts_with("diet"),
+               names_to = "year", values_to = "calcium") %>%
+  mutate(year = recode(year, "diet_y0" = 0, "diet_y1" = 1,
+                       "diet_y2" = 2, "diet_y3" = 3))
+
+# Combine groups
+calcium_tidy <- bind_rows(null_group, diet_group)
+
+# Summarise mean calcium by group and year
+calcium_summary <- calcium_tidy %>%
+  group_by(group, year) %>%
+  summarise(mean_calcium = mean(calcium, na.rm = TRUE),
+            .groups = "drop")
+
+# Plot
+ggplot(calcium_summary,
+       aes(x = year, y = mean_calcium,
+           color = group, group = group)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  labs(
+    title = "Mean Ulnar Calcium Levels Over Time by Treatment Group",
+    x = "Year",
+    y = "Mean Calcium Level",
+    color = "Treatment Group"
+  ) +
+  scale_x_continuous(breaks = 0:3,
+    labels = c("Initial", "Year 1", "Year 2", "Year 3")) +
+  theme_minimal()
+```
+
+## Generic Prompt Results
+
+The following plots were generated by Anthropic Claude using a generic
+prompt without a detailed plan. The prompt simply asked Claude to analyze
+the calcium dataset and create a visualization without any context or
+structured guidance.
+
+![Group means from generic Claude prompt](ClaudePlot2.png){width=80%}
+
+![Individual lines from generic Claude prompt](ClaudePlot1.png){width=80%}
+
+The generic response labeled the groups as Group A and Group B rather than
+using the meaningful names Null Treatment and Diet/Exercise. Time points
+were labeled as Wave 1 and Wave 2 rather than Year 1 and Year 2, indicating
+the tool did not understand the study context without guidance.
+
+## Comparison
+
+When comparing the plan-informed response and the generic response, several
+important differences emerge. The plan-informed response produced code that
+correctly identified the two groups as Null Treatment and Diet/Exercise,
+used meaningful variable names, and structured the visualization around the
+specific research question of tracking calcium levels over time. The generic
+response, by contrast, labeled the groups simply as Group A and Group B,
+showing that without context, the tool could not interpret the meaning behind
+the data structure.
+
+The visualizations themselves also differed significantly. The plan-informed
+response produced a clean line plot of group means that directly addressed
+the goal of comparing trends between treatment groups. The generic response
+produced a more complex plot showing both individual lines and group means,
+which while visually detailed, was harder to interpret and did not clearly
+communicate the research question. The generic plot also used labels like
+Wave 1 and Wave 2 instead of Year 1 and Year 2, suggesting it did not
+fully understand the study context without guidance.
+
+This exercise reveals an important lesson about working with GenAI tools:
+the quality of the output is directly tied to the quality of the input. A
+detailed, context-specific plan guided Claude to produce code and
+visualizations aligned with the actual research goals. A vague prompt
+produced technically functional but contextually weak results. This shows
+that GenAI tools are most powerful when used as collaborators guided by
+human understanding, not as replacements for it.
+
+# Reflection
+
+One of the most valuable things I have learned in this course is the concept
+of tidy data. Before this course, I would not have thought twice about a
+dataset having multiple columns representing the same variable across
+different time points. Working with the calcium dataset made this concrete —
+the data had eight columns when it should have had one row per observation.
+Learning to use pivot_longer() to reshape data has changed how I approach
+any dataset I encounter, and I now instinctively ask whether each row
+represents one observation.
+
+I have also grown significantly in my ability to create and interpret data
+visualizations using ggplot2. Early in the course, I struggled to understand
+why certain plot types were more appropriate than others. Through the busiest
+airports analysis, I learned that line graphs are ideal for showing change
+over time, and that thoughtful labels, captions, and color choices make a
+visualization genuinely useful rather than just decorative. I also learned
+the importance of writing narrative text that goes beyond describing what
+is visible — good analysis explains what the patterns mean and why they
+matter.
+
+Finally, the Monte Carlo integration exercise taught me that randomness can
+be a powerful computational tool. I found it surprising that simply generating
+random points and checking whether they fall below a curve can estimate a
+definite integral. Watching the estimate converge toward 1.0 as the number
+of points increased from 10 to 10,000 made the concept of statistical
+precision feel real and tangible. This course has shown me that data analysis
+is not just about running code — it is about thinking carefully, planning
+deliberately, and communicating clearly.
+
+# Appendices {.unnumbered}
+
+## GenAI Usage {.unnumbered}
+
+**Tool:** Anthropic Claude (claude.ai, Claude Sonnet 4.6)
+
+**Date:** April 14, 2026
+
+**Prompt 1:** I provided Claude with the calcium.csv file and the following
+plan: The calcium dataset is currently in a wide format. I want to restructure
+it so each observation is in its own row. My goal is to track how calcium
+levels change over time and whether diet and exercise play a role. I will use
+pivot_longer() to reshape the data, create a grouping variable, and use
+ggplot2 to build a line plot showing trends over time for each treatment group.
+I asked Claude to generate R code based on this plan.
+
+**Response 1:** Claude generated R code that loaded the calcium.csv file,
+renamed the eight columns to identify null and diet/exercise groups, separated
+the data into two group-specific data frames, used pivot_longer() to reshape
+each from wide to long format, combined them with bind_rows(), calculated
+group means per year, and created a line plot using ggplot2 showing mean
+ulnar calcium levels over time for each treatment group.
+
+## Code Appendix {.unnumbered}
+
+```{r}
+#| label: code-appendix
+#| ref.label: knitr::all_labels()
+#| echo: true
+#| eval: false
+
+
+
+```
